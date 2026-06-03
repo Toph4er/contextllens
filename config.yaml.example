@@ -22,3 +22,13 @@ models:
     model:    "enterprise/model"
     label:    "Enterprise Model (1M context)"
     context:  1000000
+
+  # Example: MoE model (e.g., Gemma 4 A4B)
+  # Note: MoE models have large total params but only a fraction are active.
+  # Set context to the model's supported window, but be aware that large
+  # context sizes may cause KV cache swapping if VRAM is limited.
+  my-moe-model:
+    endpoint: "http://localhost:1234/v1"
+    model:    "google/gemma-4-26b-a4b"
+    label:    "Gemma 4 26B A4B (MoE)"
+    context:  131072
