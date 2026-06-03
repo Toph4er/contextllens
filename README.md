@@ -88,8 +88,6 @@ pip install -r requirements.txt
 
 ## Notes
 
-- **DeepSeek V4 Flash** — If your endpoint is always-on (no cold starts), prefill metrics reflect warm/cached state.
-- **MLX on Apple Silicon** — MLX is self-optimizing with minimal tunable settings. Expect better decode speed but slower prefill compared to GPU backends.
 - **KV Cache** — For fair cold-start comparisons, reload the model between runs or use different prompts.
 
 ## License
