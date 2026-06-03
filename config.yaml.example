@@ -1,0 +1,24 @@
+# bench-llm.py configuration
+# Copy this file to config.yaml and fill in your actual endpoints.
+
+models:
+  # Example: GPU backend (vLLM, LM Studio, Ollama, etc.)
+  my-gpu-model:
+    endpoint: "http://localhost:8000/v1"
+    model:    "my-model-name"
+    label:    "My GPU Model"
+    context:  131072
+
+  # Example: Apple Silicon MLX backend
+  my-mac-mlx:
+    endpoint: "http://192.168.1.100:1234/v1"
+    model:    "my-mac-model"
+    label:    "My Mac MLX Model"
+    context:  131072
+
+  # Example: Enterprise cluster
+  my-enterprise:
+    endpoint: "http://10.0.0.1:8000/v1"
+    model:    "enterprise/model"
+    label:    "Enterprise Model (1M context)"
+    context:  1000000
