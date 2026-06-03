@@ -16,10 +16,10 @@ Configuration:
   Or specify a custom config with --config.
 
 Usage:
-    python3 bench-llm.py --model qwen/qwen3.6-27b
-    python3 bench-llm.py --model qwen/qwen3.6-27b-mlx --mode warm
-    python3 bench-llm.py --model qwen/qwen3.6-27b-mlx --mode ramp --context-tokens 32000
-    python3 bench-llm.py --list-models
+    python3 contextllens.py --model qwen/qwen3.6-27b
+    python3 contextllens.py --model qwen/qwen3.6-27b-mlx --mode warm
+    python3 contextllens.py --model qwen/qwen3.6-27b-mlx --mode ramp --context-tokens 32000
+    python3 contextllens.py --list-models
 """
 
 import argparse
