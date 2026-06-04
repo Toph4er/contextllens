@@ -11,6 +11,7 @@ Unified LLM benchmark script with needle-in-haystack prompts. Compare prefill sp
   - `ramp` — Growing context benchmark (powers of 2 from 1K to target)
 - **Rich metrics:** TTFT, prefill speed, decode speed, TPOT (ms/token), wall clock, needle retrieval pass/fail, and scaling factor.
 - **Multi-model config** — Add endpoints in `config.yaml`, select with `--model`.
+- **Automatic results saving** — Each run saves `results.txt`, `results.csv`, `results.json`, and full model outputs to a timestamped folder in `./results/`.
 
 ## Quick Start
 
@@ -30,6 +31,12 @@ python3 contextllens.py --model my-model --mode warm --context-tokens 32000
 
 # Ramp test (1K → 2K → 4K → ... → target)
 python3 contextllens.py --model my-model --mode ramp --context-tokens 131000 --timeout 3600
+
+# Add notes to a run (saved to notes.txt)
+python3 contextllens.py --model my-model --notes "Warm cache from earlier run"
+
+# List configured models
+python3 contextllens.py --list-models
 ```
 
 ## Configuration
@@ -75,6 +82,29 @@ Geometric progression from 1K to target context (powers of 2). Each step is an i
 | **Wall Clock** | Total request duration |
 | **Needle Retrieved** | ✅/❌ — whether the hidden fact was found in the output |
 | **Scaling Factor** | How prefill time scales as context grows (ramp mode only) |
+
+## Results
+
+Results are saved by default to `./results/` in a timestamped subfolder:
+
+```
+results/
+└── 2026-06-04_17-14_my-model_RAMP_262000/
+    ├── results.txt      # Raw terminal output
+    ├── results.csv      # Tabular metrics
+    ├── results.json     # Structured metrics with run metadata
+    ├── notes.txt        # User-supplied notes (if --notes was used)
+    └── Output/          # Full model responses per step
+        ├── my-model_1_000.txt
+        ├── my-model_2_000.txt
+        └── ...
+```
+
+| Flag | Description |
+|---|---|
+| `--results-path <dir>` | Override the default `./results/` directory |
+| `--no-save` | Disable saving results to disk |
+| `--notes "..."` | Add free-form notes (saved to `notes.txt` and `results.json`) |
 
 ## Requirements
 
