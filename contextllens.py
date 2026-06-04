@@ -102,7 +102,7 @@ class ResultsSaver:
     """Captures terminal output and saves benchmark results to disk."""
 
     def __init__(self, results_path: str, model_key: str, mode: str,
-                 context_tokens: int, cfg: dict):
+                 context_tokens: int, cfg: dict, notes: str = ""):
         self.results_path = results_path
         self.model_key = model_key
         self.mode = mode
@@ -110,6 +110,7 @@ class ResultsSaver:
         self.cfg = cfg
         self.timestamp = datetime.now()
         self.model_label = cfg.get("label", model_key)
+        self.notes = notes
         self.runs = []  # list of (step_label, metrics_dict, collected_text)
 
         # Sanitize model key for filenames
@@ -147,6 +148,12 @@ class ResultsSaver:
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(terminal_output)
 
+        # notes.txt — user-supplied run notes
+        if self.notes:
+            notes_path = os.path.join(self.run_dir, "notes.txt")
+            with open(notes_path, "w", encoding="utf-8") as f:
+                f.write(self.notes)
+
         # results.json — structured metrics
         json_data = {
             "run_info": {
@@ -156,6 +163,7 @@ class ResultsSaver:
                 "endpoint": self.cfg.get("endpoint", ""),
                 "mode": self.mode,
                 "target_context_tokens": self.context_tokens,
+                "notes": self.notes,
             },
             "runs": []
         }
@@ -603,6 +611,10 @@ def main():
         help="Disable saving results to disk.",
     )
     parser.add_argument(
+        "--notes", type=str, default="",
+        help="Free-form notes for this run (saved to notes.txt in results folder).",
+    )
+    parser.add_argument(
         "--list-models", action="store_true",
         help="List available model identifiers and exit.",
     )
@@ -638,6 +650,7 @@ def main():
             mode=args.mode,
             context_tokens=args.context_tokens,
             cfg=cfg,
+            notes=args.notes,
         )
 
     # Capture all terminal output using TeeWriter
@@ -655,6 +668,8 @@ def main():
         print(f"  Max Gen Tokens:     {args.max_tokens:,}")
         if saver:
             print(f"  Results Path:       {saver.run_dir}")
+        if args.notes:
+            print(f"  Notes:              {args.notes}")
         print(f"{'='*60}")
 
         if args.mode == "single":
