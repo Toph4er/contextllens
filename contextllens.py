@@ -15,6 +15,11 @@ Configuration:
   Copy config.yaml.example to config.yaml and edit with your endpoints.
   Or specify a custom config with --config.
 
+Results:
+  Results are saved by default to ./results/. Use --results-path to override.
+  Each run creates a timestamped subfolder with results.txt, results.csv,
+  results.json, and an Output/ folder with full LLM responses.
+
 Usage:
     python3 contextllens.py --model qwen/qwen3.6-27b
     python3 contextllens.py --model qwen/qwen3.6-27b-mlx --mode warm
@@ -23,11 +28,33 @@ Usage:
 """
 
 import argparse
+import csv
+import io
 import json
 import os
+import re
 import sys
 import time
+from datetime import datetime
 import requests
+
+
+class TeeWriter:
+    """Writes to both stdout and a StringIO buffer."""
+    def __init__(self, original_stdout):
+        self.original = original_stdout
+        self.buffer = io.StringIO()
+
+    def write(self, text):
+        self.original.write(text)
+        self.original.flush()
+        self.buffer.write(text)
+
+    def flush(self):
+        self.original.flush()
+
+    def getvalue(self):
+        return self.buffer.getvalue()
 
 # ============================================================
 # CONFIG LOADING
@@ -60,7 +87,6 @@ def find_config() -> str:
     """Find config file: --config > config.yaml > config.yaml.example"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Check for explicit --config argument (handled in main)
     for name in ["config.yaml", "config.yaml.example"]:
         path = os.path.join(script_dir, name)
         if os.path.exists(path):
@@ -70,10 +96,102 @@ def find_config() -> str:
 
 
 # ============================================================
+# RESULTS SAVING
+# ============================================================
+class ResultsSaver:
+    """Captures terminal output and saves benchmark results to disk."""
+
+    def __init__(self, results_path: str, model_key: str, mode: str,
+                 context_tokens: int, cfg: dict):
+        self.results_path = results_path
+        self.model_key = model_key
+        self.mode = mode
+        self.context_tokens = context_tokens
+        self.cfg = cfg
+        self.timestamp = datetime.now()
+        self.model_label = cfg.get("label", model_key)
+        self.runs = []  # list of (step_label, metrics_dict, collected_text)
+
+        # Sanitize model key for filenames
+        safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', model_key)
+        safe_key = safe_key.strip('_')
+
+        # Create run folder: YYYY-MM-DD_HH:MM_<Model-Name>_<Mode>_<Context-Tokens>
+        time_str = self.timestamp.strftime("%Y-%m-%d_%H:%M")
+        mode_label = mode.upper()
+        folder_name = f"{time_str}_{safe_key}_{mode_label}_{context_tokens}"
+        self.run_dir = os.path.join(results_path, folder_name)
+        self.output_dir = os.path.join(self.run_dir, "Output")
+
+        os.makedirs(self.output_dir, exist_ok=True)
+
+    def save_run(self, step_label: str, metrics: dict, collected_text: str):
+        """Record a single benchmark run."""
+        self.runs.append((step_label, metrics, collected_text))
+
+        # Save individual output file
+        if collected_text:
+            safe_label = re.sub(r'[^a-zA-Z0-9_-]', '_', step_label)
+            safe_label = safe_label.strip('_')
+            time_str = datetime.now().strftime("%Y-%m-%d_%H:%M")
+            safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', self.model_key)
+            safe_key = safe_key.strip('_')
+            filename = f"{time_str}_{safe_key}_{metrics.get('prompt_tokens', 'unknown')}.txt"
+            filepath = os.path.join(self.output_dir, filename)
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(collected_text)
+
+    def finalize(self, terminal_output: str):
+        """Write results.txt, results.csv, and results.json."""
+        # results.txt — raw terminal output
+        txt_path = os.path.join(self.run_dir, "results.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(terminal_output)
+
+        # results.json — structured metrics
+        json_data = {
+            "run_info": {
+                "timestamp": self.timestamp.isoformat(),
+                "model_key": self.model_key,
+                "model_label": self.model_label,
+                "endpoint": self.cfg.get("endpoint", ""),
+                "mode": self.mode,
+                "target_context_tokens": self.context_tokens,
+            },
+            "runs": []
+        }
+        for step_label, metrics, _ in self.runs:
+            entry = {"step": step_label}
+            entry.update(metrics)
+            # Remove collected_text from JSON (too large)
+            entry.pop("collected_text", None)
+            json_data["runs"].append(entry)
+
+        json_path = os.path.join(self.run_dir, "results.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(json_data, f, indent=2)
+
+        # results.csv — tabular metrics
+        csv_path = os.path.join(self.run_dir, "results.csv")
+        if self.runs:
+            fieldnames = ["step", "prompt_tokens", "completion_tokens",
+                          "total_tokens", "ttft", "prefill_speed",
+                          "decode_duration", "gen_speed", "tpot",
+                          "wall_clock", "needle_found"]
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                for step_label, metrics, _ in self.runs:
+                    row = {"step": step_label}
+                    row.update(metrics)
+                    writer.writerow(row)
+
+        return self.run_dir
+
+
+# ============================================================
 # NEEDLE-IN-HAYSTACK PROMPT GENERATION
 # ============================================================
-# Varied technical paragraphs to build realistic context.
-# Each is ~35-50 tokens. Cycled through to fill the target size.
 HAYSTACK_PARAGRAPHS = [
     "Meeting notes from the infrastructure team standup: discussed migration plans for the Kubernetes cluster, reviewed incident response procedures, and assigned action items for the Q3 reliability sprint. The team agreed to prioritize database sharding before the holiday season to handle projected 3x traffic growth.",
 
@@ -143,7 +261,6 @@ def build_haystack_prompt(target_tokens: int) -> str:
         para = HAYSTACK_PARAGRAPHS[idx % len(HAYSTACK_PARAGRAPHS)]
         para_tokens = estimate_tokens(para)
 
-        # Insert needle at the target position
         if not needle_inserted and current_tokens >= needle_position:
             paragraphs.append(NEEDLE)
             current_tokens += estimate_tokens(NEEDLE)
@@ -153,7 +270,6 @@ def build_haystack_prompt(target_tokens: int) -> str:
         current_tokens += para_tokens
         idx += 1
 
-    # Ensure needle was inserted (edge case: very small target)
     if not needle_inserted:
         paragraphs.insert(1, NEEDLE)
 
@@ -261,7 +377,7 @@ def run_single_benchmark(cfg: dict, prompt: str, max_tokens: int, timeout: int) 
 
     gen_speed     = (completion_tokens / decode_duration) if (completion_tokens > 1 and decode_duration > 0) else 0.0
     prefill_speed = (prompt_tokens / ttft) if (ttft and prompt_tokens > 0) else 0.0
-    tpot          = (decode_duration / completion_tokens * 1000) if (completion_tokens > 0) else 0.0  # ms/token
+    tpot          = (decode_duration / completion_tokens * 1000) if (completion_tokens > 0) else 0.0
     needle_found  = "VERTEX-9284-KILO" in collected_text
 
     return {
@@ -307,16 +423,20 @@ def print_results(results: dict, label: str = "", show_preview: bool = True):
 # ============================================================
 # BENCHMARK MODES
 # ============================================================
-def run_single(cfg: dict, context_tokens: int, max_tokens: int, timeout: int):
+def run_single(cfg: dict, context_tokens: int, max_tokens: int, timeout: int,
+               saver: ResultsSaver | None):
     """One-shot benchmark with needle-in-haystack prompt."""
     prompt = build_haystack_prompt(context_tokens)
     print(f"Sending request ({estimate_tokens(prompt):,} est. prompt tokens)...")
     results = run_single_benchmark(cfg, prompt, max_tokens, timeout)
     if results:
         print_results(results)
+        if saver:
+            saver.save_run("single", results, results.get("collected_text", ""))
 
 
-def run_warm(cfg: dict, context_tokens: int, max_tokens: int, timeout: int):
+def run_warm(cfg: dict, context_tokens: int, max_tokens: int, timeout: int,
+             saver: ResultsSaver | None):
     """Cold + warm run comparison to measure KV cache effect."""
     prompt = build_haystack_prompt(context_tokens)
     est = estimate_tokens(prompt)
@@ -346,7 +466,6 @@ def run_warm(cfg: dict, context_tokens: int, max_tokens: int, timeout: int):
     print(f"  Cold Needle:              {'✅ PASS' if cold['needle_found'] else '❌ FAIL':>10s}")
     print(f"  Warm Needle:              {'✅ PASS' if warm['needle_found'] else '❌ FAIL':>10s}")
 
-    # Show output from warm run
     if warm["collected_text"]:
         snippet = warm["collected_text"][:300]
         print(f"\n  Output preview: {snippet!r}")
@@ -354,13 +473,17 @@ def run_warm(cfg: dict, context_tokens: int, max_tokens: int, timeout: int):
             print(f"  ... ({len(warm['collected_text'])} chars total)")
     print()
 
+    if saver:
+        saver.save_run("cold", cold, cold.get("collected_text", ""))
+        saver.save_run("warm", warm, warm.get("collected_text", ""))
 
-def run_ramp(cfg: dict, max_context_tokens: int, max_tokens: int, timeout: int):
+
+def run_ramp(cfg: dict, max_context_tokens: int, max_tokens: int, timeout: int,
+             saver: ResultsSaver | None):
     """
     Growing context benchmark: powers of 2 from 1K to target.
     Each step is an independent request (no KV cache reuse between steps).
     """
-    # Calculate geometric progression steps
     steps = []
     current = 1000
     while current <= max_context_tokens:
@@ -380,6 +503,9 @@ def run_ramp(cfg: dict, max_context_tokens: int, max_tokens: int, timeout: int):
             results.append((step, result))
             print(f"TTFT={result['ttft']:.2f}s  Prefill={result['prefill_speed']:.0f}tok/s  "
                   f"GenSpeed={result['gen_speed']:.1f}tok/s  Wall={result['wall_clock']:.2f}s")
+            if saver:
+                step_label = f"{step:,}"
+                saver.save_run(step_label, result, result.get("collected_text", ""))
         else:
             print("FAILED")
             break
@@ -403,9 +529,6 @@ def run_ramp(cfg: dict, max_context_tokens: int, max_tokens: int, timeout: int):
         prefill_s  = f"{r['prefill_speed']:.0f}" if r["prefill_speed"] else "N/A"
         needle_s   = "✅" if r["needle_found"] else "❌"
 
-        # Scaling factor: compare TTFT growth to context growth
-        # If context doubles and TTFT doubles, scale = 1.0 (linear)
-        # If context doubles and TTFT quadruples, scale = 2.0 (quadratic)
         if i > 0 and r["ttft"] and results[i-1][1]["ttft"]:
             ctx_ratio = step / results[i-1][0]
             ttft_ratio = r["ttft"] / results[i-1][1]["ttft"]
@@ -414,12 +537,12 @@ def run_ramp(cfg: dict, max_context_tokens: int, max_tokens: int, timeout: int):
         else:
             scale_s = "—"
 
-        print(fmt.format(step, ttft_s, prefill_s, r["decode_duration"], r["tpot"], r["gen_speed"], r["wall_clock"], needle_s, scale_s))
+        print(fmt.format(step, ttft_s, prefill_s, r["decode_duration"], r["tpot"],
+                         r["gen_speed"], r["wall_clock"], needle_s, scale_s))
 
     print()
     print("  Scaling factor: 1.0 = linear (ideal), >1.5 = quadratic-ish (degrading)")
 
-    # Show output from the largest run
     if results[-1][1]["collected_text"]:
         snippet = results[-1][1]["collected_text"][:300]
         print(f"\n  Output preview (from {results[-1][0]:,} token run): {snippet!r}")
@@ -442,10 +565,10 @@ def main():
             "  ramp    — Growing context benchmark (powers of 2 from 1K to target)\n"
             "\n"
             "Examples:\n"
-            "  python3 bench-llm.py --model qwen/qwen3.6-27b\n"
-            "  python3 bench-llm.py --model qwen/qwen3.6-27b-mlx --mode warm\n"
-            "  python3 bench-llm.py --model qwen/qwen3.6-27b-mlx --mode ramp --context-tokens 32000\n"
-            "  python3 bench-llm.py --list-models\n"
+            "  python3 contextllens.py --model qwen/qwen3.6-27b\n"
+            "  python3 contextllens.py --model qwen/qwen3.6-27b-mlx --mode warm\n"
+            "  python3 contextllens.py --model qwen/qwen3.6-27b-mlx --mode ramp --context-tokens 32000\n"
+            "  python3 contextllens.py --list-models\n"
         ),
     )
     parser.add_argument(
@@ -471,6 +594,14 @@ def main():
     parser.add_argument(
         "--config", type=str, default=None,
         help="Path to config.yaml (default: config.yaml in script directory).",
+    )
+    parser.add_argument(
+        "--results-path", type=str, default="./results",
+        help="Directory to save results (default: ./results).",
+    )
+    parser.add_argument(
+        "--no-save", action="store_true",
+        help="Disable saving results to disk.",
     )
     parser.add_argument(
         "--list-models", action="store_true",
@@ -499,21 +630,48 @@ def main():
         print("Use --list-models to see available models.")
         sys.exit(1)
 
-    # Header
-    print(f"{'='*60}")
-    print(f"  Model:              {cfg['label']}")
-    print(f"  Endpoint:           {cfg['endpoint']}")
-    print(f"  Mode:               {args.mode}")
-    print(f"  Target Context:     {args.context_tokens:,} tokens")
-    print(f"  Max Gen Tokens:     {args.max_tokens:,}")
-    print(f"{'='*60}")
+    # Setup results saver
+    saver = None
+    if not args.no_save:
+        saver = ResultsSaver(
+            results_path=args.results_path,
+            model_key=args.model,
+            mode=args.mode,
+            context_tokens=args.context_tokens,
+            cfg=cfg,
+        )
 
-    if args.mode == "single":
-        run_single(cfg, args.context_tokens, args.max_tokens, args.timeout)
-    elif args.mode == "warm":
-        run_warm(cfg, args.context_tokens, args.max_tokens, args.timeout)
-    elif args.mode == "ramp":
-        run_ramp(cfg, args.context_tokens, args.max_tokens, args.timeout)
+    # Capture all terminal output using TeeWriter
+    tee = TeeWriter(sys.stdout)
+    original_stdout = sys.stdout
+    sys.stdout = tee
+
+    try:
+        # Header
+        print(f"{'='*60}")
+        print(f"  Model:              {cfg['label']}")
+        print(f"  Endpoint:           {cfg['endpoint']}")
+        print(f"  Mode:               {args.mode}")
+        print(f"  Target Context:     {args.context_tokens:,} tokens")
+        print(f"  Max Gen Tokens:     {args.max_tokens:,}")
+        if saver:
+            print(f"  Results Path:       {saver.run_dir}")
+        print(f"{'='*60}")
+
+        if args.mode == "single":
+            run_single(cfg, args.context_tokens, args.max_tokens, args.timeout, saver)
+        elif args.mode == "warm":
+            run_warm(cfg, args.context_tokens, args.max_tokens, args.timeout, saver)
+        elif args.mode == "ramp":
+            run_ramp(cfg, args.context_tokens, args.max_tokens, args.timeout, saver)
+    finally:
+        sys.stdout = original_stdout
+
+    # Finalize results
+    if saver:
+        terminal_text = tee.getvalue()
+        run_dir = saver.finalize(terminal_text)
+        print(f"Results saved to: {run_dir}")
 
 
 if __name__ == "__main__":
