@@ -116,8 +116,8 @@ class ResultsSaver:
         safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', model_key)
         safe_key = safe_key.strip('_')
 
-        # Create run folder: YYYY-MM-DD_HH:MM_<Model-Name>_<Mode>_<Context-Tokens>
-        time_str = self.timestamp.strftime("%Y-%m-%d_%H:%M")
+        # Create run folder: YYYY-MM-DD_HH-MM_<Model-Name>_<Mode>_<Context-Tokens>
+        time_str = self.timestamp.strftime("%Y-%m-%d_%H-%M")
         mode_label = mode.upper()
         folder_name = f"{time_str}_{safe_key}_{mode_label}_{context_tokens}"
         self.run_dir = os.path.join(results_path, folder_name)
@@ -129,14 +129,13 @@ class ResultsSaver:
         """Record a single benchmark run."""
         self.runs.append((step_label, metrics, collected_text))
 
-        # Save individual output file
+        # Save individual output file: <model-name>_<step-label>.txt
         if collected_text:
             safe_label = re.sub(r'[^a-zA-Z0-9_-]', '_', step_label)
             safe_label = safe_label.strip('_')
-            time_str = datetime.now().strftime("%Y-%m-%d_%H:%M")
             safe_key = re.sub(r'[^a-zA-Z0-9_-]', '_', self.model_key)
             safe_key = safe_key.strip('_')
-            filename = f"{time_str}_{safe_key}_{metrics.get('prompt_tokens', 'unknown')}.txt"
+            filename = f"{safe_key}_{safe_label}.txt"
             filepath = os.path.join(self.output_dir, filename)
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(collected_text)
