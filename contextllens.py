@@ -113,8 +113,13 @@ NEEDLE = (
     "production deployment requests and verified by the on-call engineer."
 )
 
-# The query asking the model to find the needle
-QUERY = "What is the deployment authorization code mentioned in the document above? Respond with only the code."
+# The query asking the model to find the needle and generate a long response
+QUERY = (
+    "What is the deployment authorization code mentioned in the document above? "
+    "After providing the code, compile a formal infrastructure status report "
+    "based on the provided meeting notes, incident reports, and performance analyses. "
+    "The report should be detailed and approximately 1000 words long."
+)
 
 
 def estimate_tokens(text: str) -> int:
@@ -456,8 +461,8 @@ def main():
         help="Target prompt tokens (default: 3300). In ramp mode, this is the max.",
     )
     parser.add_argument(
-        "--max-tokens", type=int, default=100,
-        help="Max tokens for the model to generate (default: 100).",
+        "--max-tokens", type=int, default=1500,
+        help="Max tokens for the model to generate (default: 1500).",
     )
     parser.add_argument(
         "--timeout", type=int, default=600,
