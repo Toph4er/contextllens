@@ -247,6 +247,24 @@ QUERY = (
 )
 
 
+def check_needle(text: str) -> str:
+    """Return 'exact', 'substitution', or 'not_found' for needle retrieval."""
+    raw = "VERTEX-9284-KILO"
+    if raw in text:
+        return "exact"
+    # Normalize common Unicode lookalikes to ASCII
+    normalized = (
+        text
+        .replace("\u2011", "-")  # non-breaking hyphen
+        .replace("\u2013", "-")  # en-dash
+        .replace("\u2014", "-")  # em-dash
+        .replace("\u00ad", "")   # soft hyphen (zero-width)
+    )
+    if raw in normalized:
+        return "substitution"
+    return "not_found"
+
+
 def estimate_tokens(text: str) -> int:
     """Rough estimate: ~1.3 chars/token for English text."""
     return max(1, int(len(text) / 1.3))
@@ -385,7 +403,8 @@ def run_single_benchmark(cfg: dict, prompt: str, max_tokens: int, timeout: int) 
     gen_speed     = (completion_tokens / decode_duration) if (completion_tokens > 1 and decode_duration > 0) else 0.0
     prefill_speed = (prompt_tokens / ttft) if (ttft and prompt_tokens > 0) else 0.0
     tpot          = (decode_duration / completion_tokens * 1000) if (completion_tokens > 0) else 0.0
-    needle_found  = "VERTEX-9284-KILO" in collected_text
+    needle_result = check_needle(collected_text)
+    needle_found  = needle_result != "not_found"
 
     return {
         "prompt_tokens":     prompt_tokens,
@@ -399,6 +418,7 @@ def run_single_benchmark(cfg: dict, prompt: str, max_tokens: int, timeout: int) 
         "wall_clock":        end_time - start_time,
         "collected_text":    collected_text,
         "needle_found":      needle_found,
+        "needle_result":     needle_result,
     }
 
 
@@ -417,7 +437,14 @@ def print_results(results: dict, label: str = "", show_preview: bool = True):
     print(f"  Generation Speed:         {results['gen_speed']:>10.2f} tok/s")
     print(f"  TPOT (ms/token):          {results['tpot']:>10.2f}")
     print(f"  Total Wall Clock:         {results['wall_clock']:>10.2f}s")
-    print(f"  Needle Retrieved:         {'✅ PASS' if results['needle_found'] else '❌ FAIL':>10s}")
+    nr = results.get("needle_result", "not_found")
+    if nr == "exact":
+        needle_label = "✅ PASS"
+    elif nr == "substitution":
+        needle_label = "⚠️ SUBSTITUTION"
+    else:
+        needle_label = "❌ FAIL"
+    print(f"  Needle Retrieved:         {needle_label:>16s}")
 
     if show_preview and results["collected_text"]:
         snippet = results["collected_text"][:300]
@@ -470,8 +497,22 @@ def run_warm(cfg: dict, context_tokens: int, max_tokens: int, timeout: int,
     if cold["prefill_speed"] and warm["prefill_speed"]:
         print(f"  Prefill Speedup:        {warm['prefill_speed'] / cold['prefill_speed']:>10.1f}x")
     print(f"  Wall Clock Speedup:       {cold['wall_clock'] / warm['wall_clock']:>10.1f}x")
-    print(f"  Cold Needle:              {'✅ PASS' if cold['needle_found'] else '❌ FAIL':>10s}")
-    print(f"  Warm Needle:              {'✅ PASS' if warm['needle_found'] else '❌ FAIL':>10s}")
+    cold_nr = cold.get("needle_result", "not_found")
+    warm_nr = warm.get("needle_result", "not_found")
+    if cold_nr == "exact":
+        cold_needle = "✅ PASS"
+    elif cold_nr == "substitution":
+        cold_needle = "⚠️ SUBSTITUTION"
+    else:
+        cold_needle = "❌ FAIL"
+    if warm_nr == "exact":
+        warm_needle = "✅ PASS"
+    elif warm_nr == "substitution":
+        warm_needle = "⚠️ SUBSTITUTION"
+    else:
+        warm_needle = "❌ FAIL"
+    print(f"  Cold Needle:              {cold_needle:>16s}")
+    print(f"  Warm Needle:              {warm_needle:>16s}")
 
     if warm["collected_text"]:
         snippet = warm["collected_text"][:300]
@@ -534,7 +575,12 @@ def run_ramp(cfg: dict, max_context_tokens: int, max_tokens: int, timeout: int,
     for i, (step, r) in enumerate(results):
         ttft_s     = f"{r['ttft']:.2f}" if r["ttft"] else "N/A"
         prefill_s  = f"{r['prefill_speed']:.0f}" if r["prefill_speed"] else "N/A"
-        needle_s   = "✅" if r["needle_found"] else "❌"
+        if r["needle_result"] == "exact":
+            needle_s = "✅"
+        elif r["needle_result"] == "substitution":
+            needle_s = "⚠️"
+        else:
+            needle_s = "❌"
 
         if i > 0 and r["ttft"] and results[i-1][1]["ttft"]:
             ctx_ratio = step / results[i-1][0]
@@ -547,6 +593,8 @@ def run_ramp(cfg: dict, max_context_tokens: int, max_tokens: int, timeout: int,
         print(fmt.format(step, ttft_s, prefill_s, r["decode_duration"], r["tpot"],
                          r["gen_speed"], r["wall_clock"], needle_s, scale_s))
 
+    print()
+    print("  Needle: ✅ Exact match    ⚠️ Found with char substitution    ❌ Not found")
     print()
     print("  Scaling factor: 1.0 = linear (ideal), >1.5 = quadratic-ish (degrading)")
 
