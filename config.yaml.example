@@ -1,4 +1,4 @@
-# bench-llm.py configuration
+# contextllens.py configuration
 # Copy this file to config.yaml and fill in your actual endpoints.
 
 models:
@@ -29,3 +29,11 @@ models:
     model:    "google/gemma-4-26b-a4b"
     label:    "Gemma 4 26B A4B (MoE)"
     context:  131072
+
+  # Example: Cloud model requiring API key (OpenAI, Anthropic, etc.)
+  my-cloud-model:
+    endpoint: "https://api.openai.com/v1"
+    model:    "gpt-4o"
+    label:    "GPT-4o (OpenAI)"
+    context:  128000
+    bearer_token: "sk-..."
