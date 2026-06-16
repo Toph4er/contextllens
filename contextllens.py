@@ -784,6 +784,15 @@ def run_concurrency_ramp(cfg: dict, context_tokens: int, max_tokens: int, timeou
     print(f"Concurrency Ramp: {' → '.join(str(c) for c in concurrency_levels)}")
     print(f"Context: {context_tokens:,} tokens ({est:,} est. prompt tokens)\n")
 
+    # Warmup: one throwaway C=1 request to build the KV cache
+    print("  Warming up KV cache...")
+    warmup = run_single_benchmark(cfg, prompt, max_tokens, timeout, bearer_token)
+    if warmup:
+        print(f"  Warmup: TTFT={warmup['ttft']:.2f}s  GenSpeed={warmup['gen_speed']:.1f}tok/s  Needle={warmup['needle_result']}")
+    else:
+        print("  Warmup: FAILED (continuing anyway)")
+    print()
+
     all_results = []
 
     for workers in concurrency_levels:
