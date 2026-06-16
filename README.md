@@ -2,7 +2,7 @@
 
 Unified LLM benchmark script with needle-in-haystack prompts. Compare prefill speed, decode speed, KV cache behavior, and context scaling across any OpenAI-compatible API endpoint.
 
-**Version:** 0.3.0
+**Version:** 0.3.1
 
 ## Features
 
