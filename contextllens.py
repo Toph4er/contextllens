@@ -31,7 +31,7 @@ Usage:
     python3 contextllens.py --list-models
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 import argparse
 import concurrent.futures
@@ -420,7 +420,11 @@ def run_single_benchmark(cfg: dict, prompt: str, max_tokens: int, timeout: int,
                 continue
 
             delta = choices[0].get("delta", {})
-            token_text = delta.get("content") or delta.get("reasoning_content")
+            token_text = (
+                delta.get("content")
+                or delta.get("reasoning_content")
+                or delta.get("reasoning")
+            )
 
             if token_text:
                 collected_text += token_text
