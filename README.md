@@ -2,12 +2,14 @@
 
 Unified LLM benchmark script with needle-in-haystack prompts. Compare prefill speed, decode speed, KV cache behavior, and context scaling across any OpenAI-compatible API endpoint.
 
-**Version:** 0.3.2
+**Version:** 0.4.0
 
 ## Features
 
-- **Needle-in-haystack prompts** — 30 varied paragraphs (technical, non-technical, and distractors) with a hidden fact embedded at ~25% depth. Paragraphs are shuffled with a unique seed per request so concurrent runs don't share identical prompts. No repetitive garbage.
-- **Six benchmark modes:**
+- **Multi-Needle Retrieval** — 3 needles embedded at 10%, 50%, and 90% context depth. Tests whether models can retrieve multiple facts scattered throughout long context, not just a single needle.
+- **Coherency Suite** — Automated checks for looping (4-gram repetition collapse), length violations (target ~1000 words, window 400-1500), and reasoning-loop detection for thinking models.
+- **Reasoning Diagnostics** — For models with chain-of-thought/reasoning tokens, the benchmark separately tracks reasoning loop detection and token counts.
+- **Five benchmark modes:**
   - `single` — One-shot benchmark
   - `warm` — Cold + warm run comparison (measures KV cache effect)
   - `ramp` — Growing context benchmark (powers of 2 from 1K to target)
@@ -16,6 +18,7 @@ Unified LLM benchmark script with needle-in-haystack prompts. Compare prefill sp
 - **Rich metrics:** TTFT, prefill speed, decode speed, TPOT (ms/token), wall clock, needle retrieval pass/fail, scaling factor, and aggregate throughput for concurrency modes.
 - **Multi-model config** — Add endpoints in `config.yaml`, select with `--model`. Optional `bearer_token` for cloud APIs (OpenAI, Anthropic, etc.).
 - **Automatic results saving** — Each run saves `results.txt`, `results.csv`, `results.json`, and full model outputs to a timestamped folder in `./results/`. Concurrency runs save individual output files per request.
+- **Unicode normalization** — Needle matching normalizes common Unicode lookalikes (en-dashes, em-dashes, soft hyphens) so codes with subtle character substitutions still match.
 
 ## Quick Start
 
@@ -28,7 +31,7 @@ cp config.yaml.example config.yaml
 # Edit config.yaml with your endpoints
 
 # Run a benchmark
-python3 contextllens.py --model my-model --context-tokens 32000 --max-tokens 300
+python3 contextllens.py --model my-model --context-tokens 32000 --max-tokens 1500
 
 # Compare cold vs warm (KV cache effect)
 python3 contextllens.py --model my-model --mode warm --context-tokens 32000
@@ -79,7 +82,7 @@ models:
 ## Benchmark Modes
 
 ### Single (`--mode single`)
-One-shot benchmark with a needle-in-haystack prompt at the specified context size.
+One-shot benchmark with a multi-needle prompt at the specified context size.
 
 ### Warm (`--mode warm`)
 Runs the same prompt twice and compares cold vs warm metrics. Reveals the KV cache effect — how much faster the second identical request is when the prompt's KV cache is already computed.
@@ -101,19 +104,9 @@ Reports per-level throughput, degradation curve, and best-concurrency-level.
 
 ## Needle-in-Haystack Prompt Design
 
-The prompt uses **30 paragraphs** across three categories:
+The prompt uses **multiple needle sets** drawn from a pool of 5 sets, each containing 3 needles (start, mid, end) with unique authorization codes. One set is randomly selected per run, and decoy codes from non-selected sets are injected as distractors. This prevents models from learning static code patterns.
 
-| Category | Count | Purpose |
-|---|---|---|
-| **Technical** | 15 | Infrastructure, security, performance, architecture — the original content |
-| **Non-technical** | 10 | History, recipes, math proofs, dialogue, science, culture — breaks the homogeneous "tech writing" texture |
-| **Distractors** | 5 | Needle-like phrasing with different codes (VERTEX-7143-ALPHA, VERTEX-7739-ECHO, etc.) — tests retrieval precision |
-
-The needle:
-> CRITICAL REFERENCE: Effective immediately, the deployment authorization code for the production environment is VERTEX-9284-KILO. This code must be included in all production deployment requests and verified by the on-call engineer.
-
-The query:
-> What is the current production deployment authorization code mentioned in the document above? After providing the code, compile a formal infrastructure status report based on the provided meeting notes, incident reports, and performance analyses. The report should be detailed and approximately 1000 words long.
+Needles are embedded at **10%, 50%, and 90%** of the total context depth.
 
 Paragraphs are **shuffled with a unique seed per request** (seed = `target_tokens + request_index`), so concurrent runs get different orderings while repeated runs with the same context size get the same ordering.
 
@@ -127,10 +120,14 @@ Paragraphs are **shuffled with a unique seed per request** (seed = `target_token
 | **Gen Speed** | Output tokens per second |
 | **TPOT** | Time Per Output Token (ms) — industry standard for decode comparison |
 | **Wall Clock** | Total request duration |
-| **Needle Retrieved** | ✅/❌ — whether the hidden fact was found in the output |
+| **Needle Retrieved** | ✅/❌ per position (start, mid, end) — whether each hidden code was found |
 | **Scaling Factor** | How prefill time scales as context grows (ramp mode only) |
 | **Total Throughput** | Sum of all gen speeds across concurrent requests |
 | **Degradation** | Per-request speed drop vs single-request baseline (concurrency modes) |
+| **Looping** | YES/NO — 4-gram repetition ratio below 0.5 threshold |
+| **Length** | Word count with (OK)/(OUT OF RANGE) — target ~1000 words, window 400-1500 |
+| **Reasoning Tokens** | Count of reasoning/thinking tokens (for models that produce them) |
+| **Reasoning Loop** | YES/NO — loop detection applied to reasoning text separately |
 
 ## Results
 
@@ -138,16 +135,13 @@ Results are saved by default to `./results/` in a timestamped subfolder:
 
 ```
 results/
-└── 2026-06-16_17-16_deepseek-v4-flash_CONCURRENCY-RAMP=8_16000/
+└── 2026-06-28_23-36_qwen_qwen3_6-35b-a3b-mlx_SINGLE_32000/
     ├── results.txt      # Raw terminal output
-    ├── results.csv      # Tabular metrics (with request_id column)
+    ├── results.csv      # Tabular metrics
     ├── results.json     # Structured metrics with run metadata
     ├── notes.txt        # User-supplied notes (if --notes was used)
     └── Output/          # Full model responses per step/request
-        ├── level1_req001.txt
-        ├── level2_req001.txt
-        ├── level2_req002.txt
-        └── ...
+        └── qwen_qwen3_6-35b-a3b-mlx_single.txt
 ```
 
 | Flag | Description |
@@ -155,6 +149,8 @@ results/
 | `--results-path <dir>` | Override the default `./results/` directory |
 | `--no-save` | Disable saving results to disk |
 | `--notes "..."` | Add free-form notes (saved to `notes.txt` and `results.json`) |
+| `--seed <N>` | Use a fixed random seed for reproducible needle/paragraph selection |
+| `--no-system-prompt` | Skip the system prompt role (useful for models that don't support it) |
 
 ## Requirements
 
@@ -171,6 +167,7 @@ pip install -r requirements.txt
 - **KV Cache** — For fair cold-start comparisons, reload the model between runs or use different prompts.
 - **Concurrency** — The number of concurrent requests is limited by your server's resources. Local MLX models on Mac Studio hit a hard limit around concurrency=2 at 16K context due to unified memory constraints. Enterprise GPU clusters handle higher concurrency but may show MoE expert contention effects.
 - **Bearer tokens** — Omit `bearer_token` for local endpoints that don't require authentication. For cloud APIs (OpenAI, Anthropic, etc.), include your API key as the `bearer_token` value.
+- **Reasoning models** — Models that produce chain-of-thought/reasoning tokens have those tracked separately from output tokens. The coherency checks apply to the combined reasoning + output text.
 
 ## License
 
